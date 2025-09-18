@@ -1,6 +1,6 @@
 import os
 import asyncio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -10,6 +10,12 @@ import aiohttp
 from dotenv import load_dotenv
 from transformers import pipeline
 import torch
+import cv2
+import numpy as np
+from PIL import Image
+import pytesseract
+import io
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 load_dotenv()
 HuggingFace_token = os.getenv("HUGGINGFACE_TOKEN")
@@ -22,6 +28,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 try:
     print("Loading Hugging Face NER model...")
     print("Hugging Face NER model loaded.")
@@ -42,6 +49,83 @@ def simple_drug_extraction_ai_only(text: str) -> List[str]:
             potential_drugs.append(word)
     
     return potential_drugs[:20]
+
+def preprocess_image_for_ocr(image: Image.Image) -> Image.Image:
+    """Simple image preprocessing for better OCR results"""
+    try:
+        # Convert PIL image to OpenCV format
+        img_array = np.array(image)
+        if len(img_array.shape) == 3:
+            img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        else:
+            img_cv = img_array
+        
+        # Apply basic preprocessing
+        # 1. Resize if image is too small
+        height, width = img_cv.shape
+        if height < 300 or width < 300:
+            scale_factor = max(300/height, 300/width)
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            img_cv = cv2.resize(img_cv, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        
+        # 2. Denoise
+        img_cv = cv2.medianBlur(img_cv, 3)
+        
+        # 3. Enhance contrast
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        img_cv = clahe.apply(img_cv)
+        
+        # 4. Threshold to get better black and white image
+        _, img_cv = cv2.threshold(img_cv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Convert back to PIL Image
+        return Image.fromarray(img_cv)
+    
+    except Exception as e:
+        print(f"Image preprocessing error: {e}")
+        return image  # Return original if preprocessing fails
+
+def extract_text_from_image(image_file) -> str:
+    """Extract text from image using OCR - split processing for multiple lines"""
+    try:
+        # Read image
+        image = Image.open(io.BytesIO(image_file))
+        
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Convert to numpy array for processing
+        img_array = np.array(image)
+        height, width = img_array.shape[:2]
+        
+        # Split image into top and bottom halves
+        mid_point = height // 2
+        top_half = image.crop((0, 0, width, mid_point + 50))  # Add overlap
+        bottom_half = image.crop((0, mid_point - 50, width, height))  # Add overlap
+        
+        # Process each half separately
+        text_parts = []
+        
+        for img_part in [top_half, bottom_half]:
+            text = pytesseract.image_to_string(img_part, config=r'--oem 3 --psm 7')
+            if text.strip():
+                text_parts.append(text.strip())
+        
+        # Also try full image with PSM 6
+        full_text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
+        if full_text.strip():
+            text_parts.append(full_text.strip())
+        
+        # Combine and clean results
+        all_text = ' '.join(text_parts)
+        
+        return all_text
+    
+    except Exception as e:
+        print(f"OCR extraction error: {e}")
+        return ""
 
 class DrugInteractionRequest(BaseModel):
     drugs: List[str]
@@ -298,14 +382,104 @@ async def extract_drugs_from_text(request: DrugExtractionRequest):
             "error": f"Extraction failed: {str(e)}"
         }
 
+@app.post("/extract_from_image")
+async def extract_drugs_from_image(file: UploadFile = File(...)):
+    """Extract text from prescription image and then extract drug names"""
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    try:
+        # Read uploaded file
+        contents = await file.read()
+        
+        # Extract text from image using OCR
+        extracted_text = extract_text_from_image(contents)
+        
+        if not extracted_text.strip():
+            return {
+                "extracted_text": "",
+                "extracted_drugs": [],
+                "error": "No text could be extracted from the image",
+                "note": "Try uploading a clearer image or enter text manually"
+            }
+        
+        # Use AI to extract drug names from the OCR text
+        if OPENROUTER_API_KEY:
+            try:
+                extraction_prompt = f"""
+                From the following text extracted from a medical prescription image, identify and extract ALL pharmaceutical drug names, medications, and treatments mentioned:
+                
+                Text: {extracted_text}
+                
+                Please return only actual prescription medications, over-the-counter drugs, or medical treatments as a JSON array.
+                Include both brand names and generic names if mentioned.
+                Be forgiving of OCR errors and try to recognize common drug names even if slightly misspelled.
+                Format: ["drug1", "drug2", "drug3"]
+                """
+                
+                messages = [
+                    {
+                        "role": "system", 
+                        "content": "You are a medical text analyzer specialized in identifying pharmaceutical drugs from OCR-extracted prescription text. Extract all valid drug names, even if there are minor spelling errors from OCR. Always respond with a valid JSON array."
+                    },
+                    {
+                        "role": "user", 
+                        "content": extraction_prompt
+                    }
+                ]
+                
+                response_content = await call_openrouter_api(messages, temperature=0.1, max_tokens=500)
+                
+                content = response_content.strip()
+                if content.startswith('```json'):
+                    content = content[7:]
+                if content.endswith('```'):
+                    content = content[:-3]
+                
+                extracted_drugs = json.loads(content)
+                
+                return {
+                    "extracted_text": extracted_text,
+                    "extracted_drugs": extracted_drugs,
+                    "text_processed": len(extracted_text),
+                    "extraction_method": "OCR + AI"
+                }
+                
+            except Exception as ai_error:
+                print(f"AI extraction error: {ai_error}")
+                return {
+                    "extracted_text": extracted_text,
+                    "extracted_drugs": [],
+                    "error": f"AI drug extraction failed: {str(ai_error)}",
+                    "note": "OCR succeeded but drug extraction failed"
+                }
+        else:
+            return {
+                "extracted_text": extracted_text,
+                "extracted_drugs": [],
+                "error": "No API key configured for drug extraction",
+                "note": "OCR succeeded but need API key for drug extraction"
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    # Check if Tesseract is available
+    tesseract_available = True
+    try:
+        pytesseract.get_tesseract_version()
+    except:
+        tesseract_available = False
+    
     return {
         "status": "healthy",
         "openrouter_configured": bool(OPENROUTER_API_KEY),
         "extraction_method": "AI-only",
-        "api_provider": "openrouter"
+        "api_provider": "openrouter",
+        "ocr_available": tesseract_available
     }
 
 if __name__ == "__main__":

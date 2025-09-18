@@ -3,6 +3,8 @@ import requests
 import json
 import pandas as pd
 from typing import List, Dict
+from PIL import Image
+import io
 
 st.set_page_config(
     page_title="NeuroCare AI",
@@ -44,6 +46,19 @@ def extract_drugs_from_text(text: str):
         payload = {"medical_text": text}
         response = requests.post(f"{API_BASE_URL}/extract_drugs", 
                                json=payload, timeout=30)
+        if response.status_code == 200:
+            return response.json(), None
+        else:
+            return None, f"Error: {response.status_code} - {response.text}"
+    except Exception as e:
+        return None, f"Connection error: {str(e)}"
+
+def extract_drugs_from_image(image_file):
+    """Call backend API for drug extraction from prescription image"""
+    try:
+        files = {"file": ("prescription.jpg", image_file, "image/jpeg")}
+        response = requests.post(f"{API_BASE_URL}/extract_from_image", 
+                               files=files, timeout=60)
         if response.status_code == 200:
             return response.json(), None
         else:
@@ -115,6 +130,28 @@ def display_warnings(warnings: List[str], warning_type: str):
         with st.container():
             st.warning(f"**Warning #{i+1}:** {warning}")
 
+def perform_interaction_analysis(drugs, patient_age, medical_conditions):
+    """Shared function to perform interaction analysis"""
+    with st.spinner("🔍 Analyzing drug interactions..."):
+        result, error = analyze_drug_interactions(drugs, patient_age, medical_conditions)
+    
+    if error:
+        st.error(f"❌ Analysis failed: {error}")
+    else:
+        st.markdown("---")
+        st.markdown("# 📊 Analysis Results")
+        
+        display_interactions(result.get('interactions', []))
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            display_alternatives(result.get('alternatives', []))
+        
+        with col2:
+            display_warnings(result.get('safety_warnings', []), "General Safety Warnings")
+            display_warnings(result.get('age_specific_warnings', []), 
+                           f"Age-Specific Warnings ({patient_age} years old)")
+
 # Main UI
 def main():
     st.title("💊 NeuroCare - AI Medical Prescription Verification")
@@ -126,6 +163,12 @@ def main():
         return
     
     st.success("🟢 Connected to backend server")
+    
+    # Initialize session state for extracted drugs
+    if 'extracted_drugs' not in st.session_state:
+        st.session_state.extracted_drugs = []
+    if 'switch_to_analysis' not in st.session_state:
+        st.session_state.switch_to_analysis = False
     
     with st.sidebar:
         st.markdown("# 🏥 Medical Dashboard")
@@ -189,11 +232,38 @@ def main():
             with col2:
                 st.metric("Conditions", len(medical_conditions))
     
-    tab1, tab2 = st.tabs(["🔍 Drug Interaction Analysis", "📝 Extract Drugs from Text"])
+    # Create tabs
+    tab1, tab2 = st.tabs(["🔍 Drug Interaction Analysis", "📝 Extract Drugs from Text/Image"])
+    
+    # If we need to switch to analysis tab
+    if st.session_state.switch_to_analysis:
+        st.session_state.switch_to_analysis = False
+        # Force switch to tab1 by setting extracted drugs and showing results
     
     with tab1:
         st.markdown("# 🔬 Drug Interaction Analysis")
         st.markdown("**Comprehensive analysis of potential drug interactions and safety concerns**")
+        
+        # Check if we have extracted drugs from the other tab
+        if st.session_state.extracted_drugs:
+            with st.container():
+                st.success(f"🎯 **Imported {len(st.session_state.extracted_drugs)} drug(s) from extraction:**")
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    drugs_display = ", ".join(st.session_state.extracted_drugs)
+                    st.markdown(f"💊 **{drugs_display}**")
+                with col2:
+                    if st.button("🔄 Clear Imported"):
+                        st.session_state.extracted_drugs = []
+                        st.rerun()
+                
+                if len(st.session_state.extracted_drugs) >= 2:
+                    analyze_imported = st.button("🔬 Analyze Imported Drugs", type="primary", use_container_width=True)
+                    if analyze_imported:
+                        perform_interaction_analysis(st.session_state.extracted_drugs, patient_age, medical_conditions)
+                        return
+                
+                st.divider()
         
         with st.container():
             st.markdown("### 💊 Drug Input Method")
@@ -250,25 +320,7 @@ def main():
                     st.metric("Patient Age", f"{patient_age} yrs")
                 
                 if analyze_btn:
-                    with st.spinner("🔍 Analyzing drug interactions..."):
-                        result, error = analyze_drug_interactions(drugs, patient_age, medical_conditions)
-                    
-                    if error:
-                        st.error(f"❌ Analysis failed: {error}")
-                    else:
-                        st.markdown("---")
-                        st.markdown("# 📊 Analysis Results")
-                        
-                        display_interactions(result.get('interactions', []))
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            display_alternatives(result.get('alternatives', []))
-                        
-                        with col2:
-                            display_warnings(result.get('safety_warnings', []), "General Safety Warnings")
-                            display_warnings(result.get('age_specific_warnings', []), 
-                                           f"Age-Specific Warnings ({patient_age} years old)")
+                    perform_interaction_analysis(drugs, patient_age, medical_conditions)
         
         elif drugs and len(drugs) == 1:
             st.info("ℹ️ Please enter at least 2 drugs to analyze interactions")
@@ -276,102 +328,174 @@ def main():
             st.info("💡 Please enter drug names to begin analysis")
     
     with tab2:
-        st.markdown("# 📝 Extract Drugs from Medical Text")
-        st.markdown("**Use AI to automatically extract drug names from prescription notes or medical text**")
+        st.markdown("# 📝 Extract Drugs from Medical Text or Prescription Image")
+        st.markdown("**Use AI to automatically extract drug names from prescription notes, medical text, or prescription images**")
         
+        # Input method selection
         with st.container():
-            st.markdown("### 📋 Medical Text Input")
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                medical_text = st.text_area("Enter medical text", 
-                                           placeholder="Patient prescribed Lisinopril 10mg daily for hypertension. Also taking Metformin 500mg twice daily for diabetes. Consider adding Aspirin 81mg for cardiac protection...",
-                                           height=150)
-            with col2:
-                st.markdown("**💡 Tips:**")
-                st.caption("• Include dosages")
-                st.caption("• Mention conditions")
-                st.caption("• Add frequency info")
-                st.caption("• Use medical terminology")
+            st.markdown("### 📥 Input Method")
+            extraction_method = st.radio("Choose extraction method:", 
+                                       ["📝 Text Input", "📷 Image Upload"], 
+                                       horizontal=True)
         
-        if medical_text:
-            char_count = len(medical_text)
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Characters", char_count)
-            with col2:
-                if char_count > 20:
-                    st.success("✅ Ready for extraction")
-                else:
-                    st.warning("⚠️ Add more text")
+        extracted_drugs = []
+        
+        if extraction_method == "📝 Text Input":
+            with st.container():
+                st.markdown("### 📋 Medical Text Input")
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    medical_text = st.text_area("Enter medical text", 
+                                               placeholder="Patient prescribed Lisinopril 10mg daily for hypertension. Also taking Metformin 500mg twice daily for diabetes. Consider adding Aspirin 81mg for cardiac protection...",
+                                               height=150)
+                with col2:
+                    st.markdown("**💡 Tips:**")
+                    st.caption("• Include dosages")
+                    st.caption("• Mention conditions")
+                    st.caption("• Add frequency info")
+                    st.caption("• Use medical terminology")
             
-            if st.button("🔍 Extract Drug Names", type="primary", use_container_width=True):
-                with st.spinner("🤖 Extracting drug names using AI..."):
-                    result, error = extract_drugs_from_text(medical_text)
-                
-                if error:
-                    st.error(f"❌ Extraction failed: {error}")
-                else:
-                    extracted_drugs = result.get('extracted_drugs', [])
-                    nlp_candidates = result.get('nlp_candidates', [])
-                    
-                    st.markdown("---")
-                    st.markdown("# 🎯 Extraction Results")
-                    
-                    if extracted_drugs:
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown("### 🎯 Validated Drugs")
-                            st.success(f"Found {len(extracted_drugs)} validated drug(s)")
-                            for drug in extracted_drugs:
-                                st.markdown(f"💊 **{drug}**")
-                        
-                        with col2:
-                            st.markdown("### 🤖 NLP Candidates")
-                            if nlp_candidates:
-                                st.info(f"Found {len(nlp_candidates)} candidate(s)")
-                                for candidate in nlp_candidates:
-                                    st.markdown(f"🔍 *{candidate}*")
-                            else:
-                                st.info("No additional candidates found")
-                        
-                        if len(extracted_drugs) >= 2:
-                            st.divider()
-                            st.markdown("### 🔬 Continue to Interaction Analysis?")
-                            col1, col2, col3 = st.columns([2, 1, 1])
-                            with col1:
-                                continue_analysis = st.button("🔬 Analyze These Drugs for Interactions", type="secondary")
-                            with col2:
-                                st.metric("Extracted", len(extracted_drugs))
-                            with col3:
-                                st.metric("Patient Age", f"{patient_age} yrs")
-                            
-                            if continue_analysis:
-                                with st.spinner("🔍 Analyzing extracted drugs for interactions..."):
-                                    interaction_result, interaction_error = analyze_drug_interactions(
-                                        extracted_drugs, patient_age, medical_conditions)
-                                
-                                if interaction_error:
-                                    st.error(f"❌ Analysis failed: {interaction_error}")
-                                else:
-                                    st.markdown("---")
-                                    st.markdown("# 📊 Interaction Analysis Results")
-                                    display_interactions(interaction_result.get('interactions', []))
-                                    
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        display_alternatives(interaction_result.get('alternatives', []))
-                                    with col2:
-                                        display_warnings(interaction_result.get('safety_warnings', []), 
-                                                       "Safety Warnings")
-                                        display_warnings(interaction_result.get('age_specific_warnings', []), 
-                                                       f"Age-Specific Warnings ({patient_age} years old)")
-                        else:
-                            st.info("💡 Need at least 2 drugs for interaction analysis")
+            if medical_text:
+                char_count = len(medical_text)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Characters", char_count)
+                with col2:
+                    if char_count > 20:
+                        st.success("✅ Ready for extraction")
                     else:
-                        st.warning("⚠️ No drugs found in the text. Try adding more specific medication names.")
-        else:
-            st.info("💡 Enter medical text above to extract drug names")
+                        st.warning("⚠️ Add more text")
+                
+                if st.button("🔍 Extract Drug Names from Text", type="primary", use_container_width=True):
+                    with st.spinner("🤖 Extracting drug names using AI..."):
+                        result, error = extract_drugs_from_text(medical_text)
+                    
+                    if error:
+                        st.error(f"❌ Extraction failed: {error}")
+                    else:
+                        extracted_drugs = result.get('extracted_drugs', [])
+                        nlp_candidates = result.get('nlp_candidates', [])
+                        
+                        st.markdown("---")
+                        st.markdown("# 🎯 Extraction Results")
+                        
+                        if extracted_drugs:
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("### 🎯 Validated Drugs")
+                                st.success(f"Found {len(extracted_drugs)} validated drug(s)")
+                                for drug in extracted_drugs:
+                                    st.markdown(f"💊 **{drug}**")
+                            
+                            with col2:
+                                st.markdown("### 🤖 NLP Candidates")
+                                if nlp_candidates:
+                                    st.info(f"Found {len(nlp_candidates)} candidate(s)")
+                                    for candidate in nlp_candidates:
+                                        st.markdown(f"🔍 *{candidate}*")
+                                else:
+                                    st.info("No additional candidates found")
+                        else:
+                            st.warning("⚠️ No drugs found in the text. Try adding more specific medication names.")
+            else:
+                st.info("💡 Enter medical text above to extract drug names")
+        
+        else:  # Image Upload
+            with st.container():
+                st.markdown("### 📷 Prescription Image Upload")
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    uploaded_image = st.file_uploader(
+                        "Upload prescription image", 
+                        type=['png', 'jpg', 'jpeg'],
+                        help="📸 Upload a clear image of a prescription or medical document"
+                    )
+                
+                with col2:
+                    st.markdown("**💡 Image Tips:**")
+                    st.caption("• Use good lighting")
+                    st.caption("• Avoid shadows")
+                    st.caption("• Keep text straight")
+                    st.caption("• High resolution")
+                    st.caption("• Clear handwriting")
+                
+                if uploaded_image is not None:
+                    # Display the uploaded image
+                    image = Image.open(uploaded_image)
+                    
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.image(image, caption="Uploaded Prescription", use_column_width=True)
+                    
+                    with col2:
+                        st.success("✅ Image uploaded successfully")
+                        st.metric("Image Size", f"{image.size[0]}x{image.size[1]}")
+                        st.metric("Format", image.format)
+                    
+                    if st.button("🔍 Extract Drugs from Image", type="primary", use_container_width=True):
+                        with st.spinner("📷 Processing image and extracting drugs..."):
+                            # Convert PIL image to bytes
+                            img_byte_arr = io.BytesIO()
+                            image.save(img_byte_arr, format='JPEG')
+                            img_byte_arr.seek(0)
+                            
+                            result, error = extract_drugs_from_image(img_byte_arr)
+                        
+                        if error:
+                            st.error(f"❌ Image processing failed: {error}")
+                        else:
+                            extracted_text = result.get('extracted_text', '')
+                            extracted_drugs = result.get('extracted_drugs', [])
+                            
+                            st.markdown("---")
+                            st.markdown("# 📷 Image Processing Results")
+                            
+                            # Show extracted text
+                            with st.expander("📝 Extracted Text (OCR)", expanded=False):
+                                if extracted_text:
+                                    st.text_area("Raw OCR Text:", extracted_text, height=100, disabled=True)
+                                else:
+                                    st.warning("No text could be extracted from the image")
+                            
+                            # Show extracted drugs
+                            if extracted_drugs:
+                                st.markdown("### 🎯 Extracted Drugs from Image")
+                                st.success(f"Found {len(extracted_drugs)} drug(s)")
+                                for drug in extracted_drugs:
+                                    st.markdown(f"💊 **{drug}**")
+                            else:
+                                st.warning("⚠️ No drugs found in the image. Try a clearer image or manual entry.")
+                else:
+                    st.info("📷 Upload a prescription image above to extract drug names")
+        
+        # Common section for both text and image extraction
+        if extracted_drugs and len(extracted_drugs) >= 1:
+            st.divider()
+            st.markdown("### 🔬 Continue to Interaction Analysis?")
+            
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                continue_analysis = st.button("🔬 Analyze These Drugs for Interactions", type="secondary", use_container_width=True)
+            with col2:
+                st.metric("Extracted", len(extracted_drugs))
+            with col3:
+                st.metric("Patient Age", f"{patient_age} yrs")
+            
+            if continue_analysis:
+                if len(extracted_drugs) >= 2:
+                    # Store extracted drugs in session state and switch tabs
+                    st.session_state.extracted_drugs = extracted_drugs
+                    st.session_state.switch_to_analysis = True
+                    
+                    # Perform analysis directly
+                    st.markdown("---")
+                    st.markdown("# 📊 Drug Interaction Analysis Results")
+                    perform_interaction_analysis(extracted_drugs, patient_age, medical_conditions)
+                else:
+                    st.warning("⚠️ Need at least 2 drugs for interaction analysis. Only found 1 drug.")
+                    st.info("💡 You can manually add more drugs in the Drug Interaction Analysis tab.")
     
     st.divider()
 
