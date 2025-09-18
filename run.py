@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-"""
-Simple startup script for Windows - avoids path issues
-Usage: python start_app.py
-"""
 
 import subprocess
 import sys
@@ -15,7 +10,6 @@ def start_backend():
     """Start the FastAPI backend"""
     print("🚀 Starting FastAPI backend...")
     try:
-        # Use python -m uvicorn instead of direct uvicorn
         subprocess.run([
             sys.executable, "-m", "uvicorn", "app:app",
             "--host", "0.0.0.0", 
@@ -30,9 +24,8 @@ def start_backend():
 def start_frontend():
     """Start the Streamlit frontend"""
     print("🎨 Starting Streamlit frontend...")
-    time.sleep(3)  # Give backend time to start
+    time.sleep(5)
     try:
-        # Use python -m streamlit instead of direct streamlit
         subprocess.run([
             sys.executable, "-m", "streamlit", "run", "frontend.py",
             "--server.port", "8501",
@@ -74,7 +67,6 @@ def main():
     
     print("✅ All required files found")
     
-    # Start backend in a separate thread
     backend_thread = threading.Thread(target=start_backend, daemon=True)
     frontend_thread = threading.Thread(target=start_frontend, daemon=True)
     
@@ -86,8 +78,6 @@ def main():
         
         backend_thread.start()
         frontend_thread.start()
-        
-        # Keep main thread alive
         while True:
             time.sleep(1)
             

@@ -4,7 +4,6 @@ import json
 import pandas as pd
 from typing import List, Dict
 
-# Configure Streamlit page
 st.set_page_config(
     page_title="NeuroCare AI",
     page_icon="💊",
@@ -12,7 +11,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Backend API URL
 API_BASE_URL = "http://localhost:8000"
 
 def check_backend_health():
@@ -64,7 +62,6 @@ def display_interactions(interactions: List[Dict]):
     for i, interaction in enumerate(interactions):
         severity = interaction.get('severity', 'unknown').upper()
         
-        # Color code by severity with enhanced styling
         with st.container():
             if severity == 'SEVERE':
                 st.error(f"**🔴 SEVERE INTERACTION #{i+1}**")
@@ -123,7 +120,6 @@ def main():
     st.title("💊 NeuroCare - AI Medical Prescription Verification")
     st.markdown("### 🔬 Analyze drug interactions and get safe alternative recommendations")
     
-    # Check backend connection
     if not check_backend_health():
         st.error("🔴 Backend server is not running. Please start the FastAPI backend first.")
         st.code("python app.py", language="bash")
@@ -131,16 +127,13 @@ def main():
     
     st.success("🟢 Connected to backend server")
     
-    # Enhanced sidebar with medical information
     with st.sidebar:
         st.markdown("# 🏥 Medical Dashboard")
         
-        # Patient Information Section
         with st.container():
             st.markdown("## 👤 Patient Information")
             patient_age = st.number_input("Patient Age", min_value=1, max_value=120, value=30)
             
-            # Age group indicator
             if patient_age < 18:
                 st.info("👶 Pediatric Patient")
             elif patient_age >= 65:
@@ -148,9 +141,6 @@ def main():
             else:
                 st.info("👨 Adult Patient")
         
-        # st.divider()
-        
-        # Medical conditions
         with st.container():
             st.markdown("## 🏥 Medical Conditions")
             conditions_text = st.text_area("Enter medical conditions (one per line)", 
@@ -161,9 +151,6 @@ def main():
             if medical_conditions:
                 st.success(f"📋 {len(medical_conditions)} condition(s) noted")
         
-        # st.divider()
-        
-        # Common Drug Classes Information
         with st.container():
             st.markdown("## 💊 Common Drug Classes")
             with st.expander("🫀 Cardiovascular"):
@@ -188,18 +175,12 @@ def main():
                 - **Steroids**: Prednisone, Hydrocortisone
                 """)
         
-        # st.divider()
-        
-        # Safety Reminders
         with st.container():
             st.markdown("## ⚠️ Safety Reminders")
             st.warning("Always consult healthcare providers before making medication changes")
             st.info("This tool is for educational purposes only")
             st.error("In case of emergency, call 108 immediately")
         
-        # st.divider()
-        
-        # Quick Stats
         with st.container():
             st.markdown("## 📊 Quick Stats")
             col1, col2 = st.columns(2)
@@ -208,14 +189,12 @@ def main():
             with col2:
                 st.metric("Conditions", len(medical_conditions))
     
-    # Main content tabs with enhanced styling
     tab1, tab2 = st.tabs(["🔍 Drug Interaction Analysis", "📝 Extract Drugs from Text"])
     
     with tab1:
         st.markdown("# 🔬 Drug Interaction Analysis")
         st.markdown("**Comprehensive analysis of potential drug interactions and safety concerns**")
         
-        # Enhanced drug input section
         with st.container():
             st.markdown("### 💊 Drug Input Method")
             input_method = st.radio("How would you like to input drugs?", 
@@ -225,7 +204,6 @@ def main():
         drugs = []
         
         if input_method == "✍️ Manual Entry":
-            # Enhanced manual drug entry
             with st.container():
                 st.markdown("### 📝 Enter Drug Names")
                 col1, col2 = st.columns([4, 1])
@@ -240,12 +218,10 @@ def main():
                     drugs = [drug.strip() for drug in drug_input.split(',') if drug.strip()]
                     with st.container():
                         st.success(f"**✅ Ready to analyze {len(drugs)} drug(s):**")
-                        # Display drugs as pills/badges
                         for drug in drugs:
                             st.markdown(f"💊 **{drug}**")
         
         else:
-            # Enhanced file upload
             with st.container():
                 st.markdown("### 📁 Upload Drug List")
                 uploaded_file = st.file_uploader("Upload a text file with drug names", 
@@ -262,7 +238,6 @@ def main():
                         st.info(f"**Preview:** {', '.join(drugs[:3])}" + 
                                (f" and {len(drugs)-3} more..." if len(drugs) > 3 else ""))
         
-        # Enhanced analysis section
         if drugs and len(drugs) >= 2:
             st.divider()
             with st.container():
@@ -284,7 +259,6 @@ def main():
                         st.markdown("---")
                         st.markdown("# 📊 Analysis Results")
                         
-                        # Display results in organized sections
                         display_interactions(result.get('interactions', []))
                         
                         col1, col2 = st.columns(2)
@@ -305,7 +279,6 @@ def main():
         st.markdown("# 📝 Extract Drugs from Medical Text")
         st.markdown("**Use AI to automatically extract drug names from prescription notes or medical text**")
         
-        # Enhanced text input section
         with st.container():
             st.markdown("### 📋 Medical Text Input")
             col1, col2 = st.columns([3, 1])
@@ -321,7 +294,6 @@ def main():
                 st.caption("• Use medical terminology")
         
         if medical_text:
-            # Character count and readiness indicator
             char_count = len(medical_text)
             col1, col2 = st.columns(2)
             with col1:
@@ -363,7 +335,6 @@ def main():
                             else:
                                 st.info("No additional candidates found")
                         
-                        # Option to analyze extracted drugs
                         if len(extracted_drugs) >= 2:
                             st.divider()
                             st.markdown("### 🔬 Continue to Interaction Analysis?")

@@ -10,12 +10,11 @@ import aiohttp
 from dotenv import load_dotenv
 from transformers import pipeline
 import torch
-# Load environment variables
+
 load_dotenv()
 HuggingFace_token = os.getenv("HUGGINGFACE_TOKEN")
 app = FastAPI(title="AI Medical Prescription Verification", version="1.0.0")
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,31 +24,25 @@ app.add_middleware(
 )
 try:
     print("Loading Hugging Face NER model...")
-    # This pipeline is suitable for identifying names, organizations, and other entities,
-    # which can be adapted for drug name recognition.
     print("Hugging Face NER model loaded.")
 except ImportError:
     print("Hugging Face transformers not found. Using AI-only extraction.")
-# OpenRouter API configuration
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL_NAME = "openai/gpt-3.5-turbo"
 
-# Simplified drug extraction - relies purely on AI
 def simple_drug_extraction_ai_only(text: str) -> List[str]:
     """Very simple extraction that just splits words and filters"""
-    # Basic word extraction - let AI do the heavy lifting
     words = text.replace(',', ' ').replace('.', ' ').split()
-    # Filter out obviously non-drug words
     potential_drugs = []
     for word in words:
         word = word.strip('.,();:!?')
         if len(word) > 3 and word.isalpha() and word[0].isupper():
             potential_drugs.append(word)
     
-    return potential_drugs[:20]  # Limit to prevent API overuse
+    return potential_drugs[:20]
 
-# Data models
 class DrugInteractionRequest(BaseModel):
     drugs: List[str]
     patient_age: int
@@ -64,7 +57,6 @@ class InteractionResponse(BaseModel):
     safety_warnings: List[str]
     age_specific_warnings: List[str]
 
-# FDA OpenFDA API for drug information
 FDA_API_BASE = "https://api.fda.gov/drug"
 
 async def get_drug_info_fda(drug_name: str) -> Dict:
@@ -215,11 +207,9 @@ async def analyze_drug_interactions(request: DrugInteractionRequest):
         raise HTTPException(status_code=400, detail="Invalid patient age")
     
     try:
-        # Get drug information from FDA API
         drug_info_tasks = [get_drug_info_fda(drug) for drug in request.drugs]
         drug_info_results = await asyncio.gather(*drug_info_tasks, return_exceptions=True)
         
-        # Analyze interactions using OpenRouter
         analysis = await analyze_drug_interactions_openrouter(
             request.drugs, 
             request.patient_age, 
@@ -243,7 +233,6 @@ async def extract_drugs_from_text(request: DrugExtractionRequest):
         raise HTTPException(status_code=400, detail="No text provided")
     
     try:
-        # Use AI-only extraction (no regex patterns or drug database)
         if OPENROUTER_API_KEY:
             try:
                 extraction_prompt = f"""
@@ -279,7 +268,7 @@ async def extract_drugs_from_text(request: DrugExtractionRequest):
                 
                 return {
                     "extracted_drugs": extracted_drugs,
-                    "nlp_candidates": [],  # No local NLP processing
+                    "nlp_candidates": [],
                     "text_processed": len(request.medical_text),
                     "extraction_method": "AI-only"
                 }
